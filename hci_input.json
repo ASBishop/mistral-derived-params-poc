@@ -1,0 +1,24 @@
+{
+    "cpus": 56,
+    "memory_mb": 262144,
+    "num_osds": 12,
+    "hci_profile": "hci_enterprise_few_large_vms",
+    "perf_profiles": {
+        "hci_enterprise_default": {
+            "average_guest_memory_size_in_mb": 2048,
+            "average_guest_CPU_utilization_percentage": 50
+        },
+        "hci_enterprise_many_small_vms": {
+            "average_guest_memory_size_in_mb": 1024,
+            "average_guest_CPU_utilization_percentage": 20
+        },
+        "hci_enterprise_few_large_vms": {
+            "average_guest_memory_size_in_mb": 4096,
+            "average_guest_CPU_utilization_percentage": 80
+        },
+        "hci_nfv_default": {
+            "average_guest_memory_size_in_mb": 8192,
+            "average_guest_CPU_utilization_percentage": 90
+        }
+    }
+}

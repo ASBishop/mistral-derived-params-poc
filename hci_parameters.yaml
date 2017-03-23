@@ -1,0 +1,90 @@
+---
+version: '2.0'
+
+derive_hci_parameters:
+  description: Derive the HCI Nova parameters
+  type: direct
+  input:
+    # These will eventually be pulled from ironic
+    - cpus
+    - memory_mb
+    # These will eventually be pulled from the deployment plan
+    - num_osds
+    - hci_profile
+    - perf_profiles
+    # These are typically constants, but may be overridden
+    - MB_PER_GB: 1024
+    - GB_PER_OSD: 3
+    - GB_OVERHEAD_PER_GUEST: 0.5  # based on measurement in test environment
+    - CORES_PER_OSD: 1.0          # may be a little low in I/O intensive workloads
+
+  tasks:
+    get_profile:
+      publish:
+        perf_profile: <% $.perf_profiles.get($.hci_profile, '') %>
+      on-success:
+        - set_failed_invalid_profile: <% $.perf_profile = '' %>
+        - calculate_nova_parameters: <% not $.perf_profile = '' %>
+
+    # HCI calculations are broken into multiple steps. This is necessary
+    # because variables published by a Mistral task are not available
+    # for use by that same task. In other words, variables computed and
+    # published in a task are only available in subsequent tasks.
+
+    calculate_nova_parameters:
+      on-success: calc_step_2
+      publish:
+        avg_guest_util: <% $.perf_profile.average_guest_CPU_utilization_percentage / 100.0 %>
+        avg_guest_size_gb: <% $.perf_profile.average_guest_memory_size_in_mb / float($.MB_PER_GB) %>
+        num_cores: <% $.cpus %>
+        memory_gb: <% $.memory_mb / float($.MB_PER_GB) %>
+
+    calc_step_2:
+      on-success: calc_step_3
+      publish:
+        nonceph_cores: <% $.num_cores - int($.CORES_PER_OSD * $.num_osds) %>
+        nonceph_mem_gb: <% $.memory_gb - ($.GB_PER_OSD * $.num_osds) %>
+
+    calc_step_3:
+      on-success: calc_step_4
+      publish:
+        num_guests: <% int($.nonceph_mem_gb / ($.avg_guest_size_gb + $.GB_OVERHEAD_PER_GUEST)) %>
+        guest_vCPUs: <% $.nonceph_cores / $.avg_guest_util %>
+
+    calc_step_4:
+      on-success: validate_results
+      publish:
+        reserved_host_memory: <% $.MB_PER_GB * int($.nonceph_mem_gb - ($.num_guests * $.GB_OVERHEAD_PER_GUEST)) %>
+        cpu_allocation_ratio: <% $.guest_vCPUs / $.num_cores %>
+
+    validate_results:
+      publish:
+        # At least half of the memory and half of the CPU cores must be
+        # available to Nova for HCI to be viable.
+        mem_ok: <% $.reserved_host_memory >= ($.memory_mb / 2) %>
+        cpu_ok: <% $.cpu_allocation_ratio >= 0.5 %>
+      on-success:
+        - set_failed_insufficient_mem: <% not $.mem_ok %>
+        - set_failed_insufficient_cpu: <% not $.cpu_ok %> 
+        - publish_nova_parameters: <% $.mem_ok and $.cpu_ok %>
+
+    publish_nova_parameters:
+      publish:
+        nova::compute::reserved_host_memory: <% $.reserved_host_memory %>
+        nova::cpu_allocation_ratio: <% $.cpu_allocation_ratio %>
+        status: OK
+
+    set_failed_invalid_profile:
+      publish:
+        message: "'<% $.hci_profile %>' is not a valid HCI profile."
+        status: FAILED
+
+    set_failed_insufficient_mem:
+      publish:
+        mem_message: "<% $.memory_mb %> MB is not enough memory to run hyperconverged."
+        status: FAILED
+
+    set_failed_insufficient_cpu:
+      publish:
+        cpu_message: "<% $.num_cores %> CPU cores are not enough to run hyperconverged."
+        status: FAILED
